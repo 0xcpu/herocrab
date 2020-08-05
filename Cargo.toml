@@ -1,0 +1,15 @@
+[package]
+name = "herocrab"
+version = "0.1.0"
+authors = ["0xcpu <cornel.punga@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+widestring = "0.4.2"
+serde_json = "1.0"
+clap = "*"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.9", features = ["ntdef", "tlhelp32", "handleapi", "winuser", "errhandlingapi", "synchapi", "winnt", "winerror", "fileapi"] }
