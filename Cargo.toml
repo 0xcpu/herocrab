@@ -12,4 +12,8 @@ serde_json = "1.0"
 clap = "*"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3.9", features = ["ntdef", "tlhelp32", "handleapi", "winuser", "errhandlingapi", "synchapi", "winnt", "winerror", "fileapi"] }
+winapi = { version = "0.3.9", features = [
+    "ntdef", "tlhelp32", "handleapi", "winuser", "errhandlingapi",
+    "synchapi", "winnt", "winerror", "fileapi", "debugapi"
+    ] }
+ntapi  = { version = "0.3.4", features = ["nightly"] }

@@ -1,8 +1,10 @@
 extern crate widestring;
 extern crate winapi;
+extern crate ntapi;
 
 use std::collections::HashSet;
 use std::mem;
+
 use winapi::shared::{
     minwindef::FALSE,
     minwindef::MAX_PATH,
@@ -26,7 +28,10 @@ use winapi::um::tlhelp32::{
 use winapi::um::winuser::{EnumWindows, GetWindowTextW, GetWindowTextLengthW};
 use winapi::um::synchapi::OpenMutexW;
 use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
+use winapi::um::debugapi::CheckRemoteDebuggerPresent;
+use winapi::um::processthreadsapi::GetCurrentProcess;
 
+use ntapi::ntpsapi::NtCurrentPeb;
 
 /// Collect running processes
 pub fn get_processes_names() -> Result<HashSet<String>, DWORD> {
@@ -184,6 +189,23 @@ pub fn is_any_unwanted_symlink_existent(unwanted_symlink_names: &HashSet<String>
     Ok(false)
 }
 
+pub fn is_debugged_peb() -> Result<bool, DWORD> {
+    unsafe{
+        Ok((*NtCurrentPeb()).BeingDebugged == 1)
+    }
+}
+
+pub fn is_remotely_debugged() -> Result<bool, DWORD> {
+    unsafe {
+        let mut result: i32 = 0;
+        if CheckRemoteDebuggerPresent(GetCurrentProcess(), &mut result) > 0 {
+            return Ok(result != 0);
+        } else {
+            return Err(GetLastError());
+        }
+    }
+}
+
 #[cfg(test)]
 #[cfg(windows)]
 mod tests {
@@ -235,5 +257,15 @@ mod tests {
     #[ignore]
     fn test_symlink_sysmon() {
         assert_eq!(is_symlink_existent(&"\\\\.\\SysmonDrv".to_string()), Ok(true));
+    }
+
+    #[test]
+    fn test_is_debugged_peb() {
+        assert_eq!(is_debugged_peb(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_remotely_debugged() {
+        assert_eq!(is_remotely_debugged(), Ok(false));
     }
 }
