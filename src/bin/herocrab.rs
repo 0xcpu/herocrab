@@ -12,7 +12,9 @@ use herocrab::windows::analysis::{
     is_any_unwanted_mutant_existent,
     is_any_unwanted_symlink_existent,
     is_debugged_peb,
-    is_remotely_debugged
+    is_remotely_debugged,
+    is_debugged_invalid_handle,
+    is_debugged_hw_bp
 };
 #[cfg(windows)]
 use winapi::shared::minwindef::DWORD;
@@ -98,15 +100,27 @@ fn run_analysis(config: &serde_json::Value) {
         config_field_name: None,
         func: AnalysisFn::Arg0(is_remotely_debugged),
     };
+    let task_is_debug_inv_h = Task {
+        name: "Debugged invalid handle",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_debugged_invalid_handle),
+    };
+    let task_is_debug_hw = Task {
+        name: "Hw breakpoins",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_debugged_hw_bp),
+    };
     tasks.push(&task_processes);
     tasks.push(&task_windows);
     tasks.push(&task_mutants);
     tasks.push(&task_symlinks);
     tasks.push(&task_is_debug_peb);
     tasks.push(&task_is_debug_rem);
+    tasks.push(&task_is_debug_inv_h);
+    tasks.push(&task_is_debug_hw);
 
     for t in &tasks {
-        print!("Testing: <{:^20}> ", t.name);
+        print!("Testing: <{:^30}> ", t.name);
         if let Some(cn) = t.config_field_name {
             let unwanted: HashSet<String> = config["windows"][cn].as_array()
                                                                  .unwrap()
@@ -120,8 +134,8 @@ fn run_analysis(config: &serde_json::Value) {
                 _                   => panic!("wrong function type"),
             };
             match func(&unwanted) {
-                Ok(true)  => println!("{:>30}", "Detected"),
-                Ok(false) => println!("{:>30}", "Not detected"),
+                Ok(true)  => println!("{:>40}", "Detected"),
+                Ok(false) => println!("{:>40}", "Not detected"),
                 Err(err)  => println!("Oops: {}", err),
             }
         } else {
@@ -130,8 +144,8 @@ fn run_analysis(config: &serde_json::Value) {
                 _                   => panic!("wrong function type"),
             };
             match func() {
-                Ok(true)  => println!("{:>30}", "Detected"),
-                Ok(false) => println!("{:>30}", "Not detected"),
+                Ok(true)  => println!("{:>40}", "Detected"),
+                Ok(false) => println!("{:>40}", "Not detected"),
                 Err(err)  => println!("Oops: {}", err),
             }
         }

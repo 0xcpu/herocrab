@@ -17,7 +17,8 @@ use winapi::shared::{
     winerror::ERROR_FILE_NOT_FOUND
 };
 use winapi::um::winnt::{
-    SYNCHRONIZE, GENERIC_READ, GENERIC_WRITE, FILE_SHARE_WRITE, FILE_SHARE_READ, FILE_ATTRIBUTE_NORMAL
+    SYNCHRONIZE, GENERIC_READ, GENERIC_WRITE, FILE_SHARE_WRITE, FILE_SHARE_READ, FILE_ATTRIBUTE_NORMAL,
+    CONTEXT, CONTEXT_DEBUG_REGISTERS
 };
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
@@ -29,7 +30,7 @@ use winapi::um::winuser::{EnumWindows, GetWindowTextW, GetWindowTextLengthW};
 use winapi::um::synchapi::OpenMutexW;
 use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
 use winapi::um::debugapi::CheckRemoteDebuggerPresent;
-use winapi::um::processthreadsapi::GetCurrentProcess;
+use winapi::um::processthreadsapi::{GetCurrentProcess, GetThreadContext, GetCurrentThread};
 
 use ntapi::ntpsapi::NtCurrentPeb;
 
@@ -206,6 +207,32 @@ pub fn is_remotely_debugged() -> Result<bool, DWORD> {
     }
 }
 
+extern "C" {
+    fn c_is_debugged_invalid_handle() -> i32;
+}
+
+pub fn is_debugged_invalid_handle() -> Result<bool, DWORD> {
+    match unsafe { c_is_debugged_invalid_handle() } {
+        0 => Ok(false),
+        _ => Ok(true)
+    }
+}
+
+pub fn is_debugged_hw_bp() -> Result<bool, DWORD> {
+    let mut ctx = unsafe { mem::zeroed::<CONTEXT>() };
+    ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+
+    if unsafe { GetThreadContext(GetCurrentThread(), &mut ctx) } == TRUE {
+        if ctx.Dr0 != 0 || ctx.Dr1 != 0 || ctx.Dr2 != 0 || ctx.Dr3 != 0 {
+            return Ok(true);
+        }
+    } else {
+        return unsafe { Err(GetLastError()) };
+    }
+
+    Ok(false)
+}
+
 #[cfg(test)]
 #[cfg(windows)]
 mod tests {
@@ -267,5 +294,15 @@ mod tests {
     #[test]
     fn test_is_remotely_debugged() {
         assert_eq!(is_remotely_debugged(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_invalid_handle() {
+        assert_eq!(is_debugged_invalid_handle(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_hw_bp() {
+        assert_eq!(is_debugged_hw_bp(), Ok(false));
     }
 }
