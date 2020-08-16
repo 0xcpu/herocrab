@@ -18,9 +18,9 @@ use winapi::shared::{
 };
 use winapi::um::winnt::{
     SYNCHRONIZE, GENERIC_READ, GENERIC_WRITE, FILE_SHARE_WRITE, FILE_SHARE_READ, FILE_ATTRIBUTE_NORMAL,
-    CONTEXT, CONTEXT_DEBUG_REGISTERS
+    CONTEXT, CONTEXT_DEBUG_REGISTERS, PEXCEPTION_POINTERS
 };
-use winapi::um::errhandlingapi::GetLastError;
+use winapi::um::errhandlingapi::{GetLastError, AddVectoredExceptionHandler, RemoveVectoredExceptionHandler};
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::tlhelp32::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
@@ -31,6 +31,8 @@ use winapi::um::synchapi::OpenMutexW;
 use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
 use winapi::um::debugapi::CheckRemoteDebuggerPresent;
 use winapi::um::processthreadsapi::{GetCurrentProcess, GetThreadContext, GetCurrentThread};
+use winapi::um::minwinbase::EXCEPTION_BREAKPOINT;
+use winapi::vc::excpt::{EXCEPTION_CONTINUE_SEARCH, EXCEPTION_CONTINUE_EXECUTION};
 
 use ntapi::ntpsapi::NtCurrentPeb;
 
@@ -233,6 +235,88 @@ pub fn is_debugged_hw_bp() -> Result<bool, DWORD> {
     Ok(false)
 }
 
+static mut INT_2D_RESULT: bool = true;
+
+unsafe extern "system" fn veh_handler_int2d(exception_info: PEXCEPTION_POINTERS) -> i32 {
+    INT_2D_RESULT = false;
+
+    if (*(*exception_info).ExceptionRecord).ExceptionCode == EXCEPTION_BREAKPOINT {
+        #[cfg(target_arch = "x86_64")]
+        {
+            (*(*exception_info).ContextRecord).Rip += 1;
+        }
+        #[cfg(target_arch = "x86")]
+        {
+            (*(*exception_info).ContextRecord).Eip += 1;
+        }
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+pub fn is_debugged_int_2d() -> Result<bool, DWORD> {
+    unsafe { INT_2D_RESULT = true; }
+
+    let handle = unsafe { AddVectoredExceptionHandler(1, Some(veh_handler_int2d)) };
+    if handle == NULL {
+        return unsafe { Err(GetLastError()) };
+    }
+
+    unsafe {
+        asm!(
+            "int   2dh",
+            "nop"
+        );
+
+        RemoveVectoredExceptionHandler(handle);
+
+        Ok(INT_2D_RESULT)
+    }
+}
+
+static mut INT_3_RESULT: bool = true;
+
+unsafe extern "system" fn veh_handler_int3(exception_info: PEXCEPTION_POINTERS) -> i32 {
+    INT_3_RESULT = false;
+
+    if (*(*exception_info).ExceptionRecord).ExceptionCode == EXCEPTION_BREAKPOINT {
+        #[cfg(target_arch = "x86_64")]
+        {
+            (*(*exception_info).ContextRecord).Rip += 1;
+        }
+        #[cfg(target_arch = "x86")]
+        {
+            (*(*exception_info).ContextRecord).Eip += 1;
+        }
+
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+pub fn is_debugged_int_3() -> Result<bool, DWORD> {
+    unsafe { INT_3_RESULT = true; }
+
+    let handle = unsafe { AddVectoredExceptionHandler(1, Some(veh_handler_int3)) };
+    if handle == NULL {
+        return unsafe { Err(GetLastError()) };
+    }
+
+    unsafe {
+        asm!(
+            "int   3h",
+            "nop"
+        );
+
+        RemoveVectoredExceptionHandler(handle);
+
+        Ok(INT_3_RESULT)
+    }
+}
+
 #[cfg(test)]
 #[cfg(windows)]
 mod tests {
@@ -304,5 +388,15 @@ mod tests {
     #[test]
     fn test_is_debugged_hw_bp() {
         assert_eq!(is_debugged_hw_bp(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_int_2d() {
+        assert_eq!(is_debugged_int_2d(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_int_3() {
+        assert_eq!(is_debugged_int_3(), Ok(false));
     }
 }

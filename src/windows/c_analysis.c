@@ -6,7 +6,7 @@ int c_is_debugged_invalid_handle() {
     FARPROC pNtClose = GetProcAddress(hLib, "NtClose");
 
     __try {
-        NtClose((HANDLE)0xcafebabe);
+        pNtClose((HANDLE)0xcafebabe);
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         return TRUE;
