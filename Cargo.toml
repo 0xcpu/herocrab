@@ -14,7 +14,8 @@ clap       = "*"
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = [
     "ntdef", "tlhelp32", "handleapi", "winuser", "errhandlingapi",
-    "synchapi", "winnt", "winerror", "fileapi", "debugapi"
+    "synchapi", "winnt", "winerror", "fileapi", "debugapi", "sysinfoapi",
+    "memoryapi", "psapi", "libloaderapi"
     ] }
 ntapi  = { version = "0.3.4", features = ["nightly"] }
 

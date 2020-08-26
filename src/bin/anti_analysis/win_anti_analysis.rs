@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 use herocrab::windows::analysis::{
     is_any_unwanted_process_running,
@@ -10,23 +10,28 @@ use herocrab::windows::analysis::{
     is_debugged_invalid_handle,
     is_debugged_hw_bp,
     is_debugged_int_2d,
-    is_debugged_int_3
+    is_debugged_int_3,
+    is_debugged_global_flag,
+    is_debugged_guard_page,
+    is_any_module_hooked
 };
 
 use winapi::shared::minwindef::DWORD;
 
 
-type AnalysisFnArg0 = fn() -> Result<bool, DWORD>;
-type AnalysisFnArg1 = fn(&HashSet<String>) -> Result<bool, DWORD>;
+type AnalysisFnArg0   = fn() -> Result<bool, DWORD>;
+type AnalysisFnArg1Hs = fn(&HashSet<String>) -> Result<bool, DWORD>;
+type AnalysisFnArg1Hm = fn(&HashMap<String, Vec<String>>) -> Result<bool, DWORD>;
 
 enum AnalysisFn {
     Arg0(AnalysisFnArg0),
-    Arg1(AnalysisFnArg1),
+    Arg1Hs(AnalysisFnArg1Hs),
+    Arg1Hm(AnalysisFnArg1Hm)
 }
 
 struct Task {
     name: &'static str,
-    config_field_name: Option<&'static str>, // TODO: Maybe use a default value?
+    config_field_name: Option<&'static str>,
     func: AnalysisFn,
 }
 
@@ -36,22 +41,22 @@ pub fn run_analysis(config: &serde_json::Value) {
     let task_processes = Task {
         name: "Processes",
         config_field_name: Some("processes"),
-        func: AnalysisFn::Arg1(is_any_unwanted_process_running),
+        func: AnalysisFn::Arg1Hs(is_any_unwanted_process_running),
     };
     let task_windows = Task {
         name: "Top windows",
         config_field_name: Some("top_windows"),
-        func: AnalysisFn::Arg1(is_any_unwanted_top_window_existent),
+        func: AnalysisFn::Arg1Hs(is_any_unwanted_top_window_existent),
     };
     let task_mutants = Task {
         name: "Mutants",
         config_field_name: Some("mutants"),
-        func: AnalysisFn::Arg1(is_any_unwanted_mutant_existent),
+        func: AnalysisFn::Arg1Hs(is_any_unwanted_mutant_existent),
     };
     let task_symlinks = Task {
         name: "Symlinks",
         config_field_name: Some("symlinks"),
-        func: AnalysisFn::Arg1(is_any_unwanted_symlink_existent),
+        func: AnalysisFn::Arg1Hs(is_any_unwanted_symlink_existent),
     };
     let task_is_debug_peb = Task {
         name: "PEB IsDebugged",
@@ -83,6 +88,21 @@ pub fn run_analysis(config: &serde_json::Value) {
         config_field_name: None,
         func: AnalysisFn::Arg0(is_debugged_int_3),
     };
+    let task_is_debug_global_flag = Task {
+        name: "NtGlobalFlag",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_debugged_global_flag),
+    };
+    let task_is_debug_guard_page = Task {
+        name: "Debug guard page",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_debugged_guard_page),
+    };
+    let task_is_api_hooked = Task {
+        name: "Hooked APIs",
+        config_field_name: Some("modules"),
+        func: AnalysisFn::Arg1Hm(is_any_module_hooked),
+    };
     tasks.push(&task_processes);
     tasks.push(&task_windows);
     tasks.push(&task_mutants);
@@ -93,25 +113,51 @@ pub fn run_analysis(config: &serde_json::Value) {
     tasks.push(&task_is_debug_hw);
     tasks.push(&task_is_debug_int_2d);
     tasks.push(&task_is_debug_int_3);
+    tasks.push(&task_is_debug_global_flag);
+    tasks.push(&task_is_debug_guard_page);
+    tasks.push(&task_is_api_hooked);
 
     for t in &tasks {
         print!("Testing: <{:^30}> ", t.name);
         if let Some(cn) = t.config_field_name {
-            let unwanted: HashSet<String> = config["windows"][cn].as_array()
-                                                                 .unwrap()
-                                                                 .iter()
-                                                                 .map(|v| v.as_str()
-                                                                           .unwrap()
-                                                                           .to_string())
-                                                                 .collect();
-            let func = match t.func {
-                AnalysisFn::Arg1(f) => f,
-                _                   => panic!("wrong function type"),
-            };
-            match func(&unwanted) {
-                Ok(true)  => println!("{:>40}", "Detected"),
-                Ok(false) => println!("{:>40}", "Not detected"),
-                Err(err)  => println!("Oops: {}", err),
+            if config["windows"][cn].is_array() {
+                let arg = config["windows"][cn].as_array()
+                                               .unwrap()
+                                               .iter()
+                                               .map(|v| v.as_str()
+                                                         .unwrap()
+                                                         .to_string())
+                                               .collect();
+                let func = match t.func {
+                    AnalysisFn::Arg1Hs(f) => f,
+                    _                     => panic!("wrong function type"),
+                };
+                match func(&arg) {
+                    Ok(true)  => println!("{:>40}", "Detected"),
+                    Ok(false) => println!("{:>40}", "Not detected"),
+                    Err(err)  => println!("Oops: {}", err),
+                }
+            } else if config["windows"][cn].is_object() {
+                let mut arg: HashMap<String, Vec<String>> = HashMap::new();
+                for (key, value) in config["windows"][cn].as_object().unwrap() {
+                    arg.insert(key.to_string(), value.as_array()
+                                                     .unwrap()
+                                                     .iter()
+                                                     .map(|v| v.as_str()
+                                                               .unwrap()
+                                                               .to_string())
+                                                     .collect());
+                }
+
+                let func = match t.func {
+                    AnalysisFn::Arg1Hm(f) => f,
+                    _                     => panic!("wrong function type"),
+                };
+                match func(&arg) {
+                    Ok(true)  => println!("{:>40}", "Detected"),
+                    Ok(false) => println!("{:>40}", "Not detected"),
+                    Err(err)  => println!("Oops: {}", err),
+                }
             }
         } else {
             let func = match t.func {

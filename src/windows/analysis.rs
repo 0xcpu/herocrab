@@ -2,7 +2,7 @@ extern crate widestring;
 extern crate winapi;
 extern crate ntapi;
 
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::mem;
 
 use winapi::shared::{
@@ -14,12 +14,15 @@ use winapi::shared::{
     ntdef::HANDLE,
     ntdef::NULL,
     windef::HWND,
-    winerror::ERROR_FILE_NOT_FOUND
+    winerror::ERROR_FILE_NOT_FOUND,
+    ntstatus::STATUS_GUARD_PAGE_VIOLATION
 };
 use winapi::um::winnt::{
     SYNCHRONIZE, GENERIC_READ, GENERIC_WRITE, FILE_SHARE_WRITE, FILE_SHARE_READ, FILE_ATTRIBUTE_NORMAL,
-    CONTEXT, CONTEXT_DEBUG_REGISTERS, PEXCEPTION_POINTERS
+    CONTEXT, CONTEXT_DEBUG_REGISTERS, PEXCEPTION_POINTERS, MEM_COMMIT, MEM_RESERVE, MEM_RELEASE,
+    PAGE_GUARD, PAGE_EXECUTE_READWRITE
 };
+use winapi::um::winnt::{RtlFillMemory};
 use winapi::um::errhandlingapi::{GetLastError, AddVectoredExceptionHandler, RemoveVectoredExceptionHandler};
 use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
 use winapi::um::tlhelp32::{
@@ -32,7 +35,11 @@ use winapi::um::fileapi::{CreateFileW, OPEN_EXISTING};
 use winapi::um::debugapi::CheckRemoteDebuggerPresent;
 use winapi::um::processthreadsapi::{GetCurrentProcess, GetThreadContext, GetCurrentThread};
 use winapi::um::minwinbase::EXCEPTION_BREAKPOINT;
+use winapi::um::sysinfoapi::{GetSystemInfo, SYSTEM_INFO};
+use winapi::um::memoryapi::{VirtualAlloc, VirtualFree, VirtualProtect};
 use winapi::vc::excpt::{EXCEPTION_CONTINUE_SEARCH, EXCEPTION_CONTINUE_EXECUTION};
+use winapi::um::psapi::{GetModuleInformation, MODULEINFO};
+use winapi::um::libloaderapi::{LoadLibraryW, GetProcAddress};
 
 use ntapi::ntpsapi::NtCurrentPeb;
 
@@ -138,9 +145,9 @@ pub fn is_mutant_existent(mutant_name: &String) -> Result<bool, DWORD> {
     let h_mutant = unsafe { OpenMutexW(SYNCHRONIZE, FALSE, w_mutant_name.as_ptr() as *const u16) };
     let last_error = unsafe { GetLastError() };
     
-    if h_mutant == NULL && last_error == ERROR_FILE_NOT_FOUND {
+    if h_mutant.is_null() && last_error == ERROR_FILE_NOT_FOUND {
         return Ok(false);
-    } else if h_mutant == NULL {
+    } else if h_mutant.is_null() {
         return Err(last_error);
     }
     
@@ -260,7 +267,7 @@ pub fn is_debugged_int_2d() -> Result<bool, DWORD> {
     unsafe { INT_2D_RESULT = true; }
 
     let handle = unsafe { AddVectoredExceptionHandler(1, Some(veh_handler_int2d)) };
-    if handle == NULL {
+    if handle.is_null() {
         return unsafe { Err(GetLastError()) };
     }
 
@@ -301,7 +308,7 @@ pub fn is_debugged_int_3() -> Result<bool, DWORD> {
     unsafe { INT_3_RESULT = true; }
 
     let handle = unsafe { AddVectoredExceptionHandler(1, Some(veh_handler_int3)) };
-    if handle == NULL {
+    if handle.is_null() {
         return unsafe { Err(GetLastError()) };
     }
 
@@ -316,6 +323,127 @@ pub fn is_debugged_int_3() -> Result<bool, DWORD> {
         Ok(INT_3_RESULT)
     }
 }
+
+pub fn is_debugged_global_flag() -> Result<bool, DWORD> {
+    unsafe {
+        Ok(((*NtCurrentPeb()).NtGlobalFlag & 0x00000070) != 0)
+    }
+}
+
+static mut GUARD_PAGE_RESULT: bool = true;
+
+unsafe extern "system" fn veh_handler_guard_page(exception_info: PEXCEPTION_POINTERS) -> i32 {
+    GUARD_PAGE_RESULT = false;
+
+    if (*(*exception_info).ExceptionRecord).ExceptionCode == STATUS_GUARD_PAGE_VIOLATION as u32 {
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+pub fn is_debugged_guard_page() -> Result<bool, DWORD> {
+    let mut system_info = unsafe { mem::zeroed::<SYSTEM_INFO>() };
+
+    unsafe { GUARD_PAGE_RESULT = true; }
+
+    let handle = unsafe { AddVectoredExceptionHandler(1, Some(veh_handler_guard_page)) };
+    if handle.is_null() {
+        return unsafe { Err(GetLastError()) };
+    }
+
+    unsafe { GetSystemInfo(&mut system_info) };
+
+    let mem = unsafe { VirtualAlloc(
+                                    NULL,
+                                    system_info.dwPageSize as usize,
+                                    MEM_COMMIT | MEM_RESERVE,
+                                    PAGE_EXECUTE_READWRITE
+                                    ) };
+    if !mem.is_null() {
+        unsafe { RtlFillMemory(mem, 1, 0xc3); }
+
+        let mut old_prot = 0;
+        if unsafe { VirtualProtect(
+                                    mem,
+                                    system_info.dwPageSize as usize,
+                                    PAGE_EXECUTE_READWRITE | PAGE_GUARD, &mut old_prot
+                                    ) } != 0 {
+                                    let ptr = mem as *const ();
+                                    let func = unsafe { std::mem::transmute::<*const (), extern "system" fn() -> ()>(ptr) };
+                                    (func)();
+        } else {
+            unsafe {
+                VirtualFree(mem, 0, MEM_RELEASE);
+                RemoveVectoredExceptionHandler(handle);
+
+                return Err(GetLastError());
+            }
+        }
+    } else {
+        unsafe {
+            VirtualFree(mem, 0, MEM_RELEASE);
+            RemoveVectoredExceptionHandler(handle);
+
+            return Err(GetLastError());
+        }
+    }
+
+    unsafe {
+        VirtualFree(mem, 0, MEM_RELEASE);
+        RemoveVectoredExceptionHandler(handle);
+
+        Ok(GUARD_PAGE_RESULT)
+    }
+}
+
+pub fn is_any_api_hooked(module_name: &mut String, module_apis: &Vec<String>) -> Result<bool, DWORD> {
+    let mut module_info = unsafe { mem::zeroed::<MODULEINFO>() };
+    let mut w_module_name = widestring::U16String::from_str(module_name);
+    w_module_name.push_os_str(".dll\x00");
+
+    let h_module = unsafe { LoadLibraryW(w_module_name.as_ptr() as *const u16) };
+    if h_module.is_null() {
+        unsafe { return Err(GetLastError()); }
+    }
+
+    unsafe {
+        if GetModuleInformation(
+            GetCurrentProcess(),
+            h_module,
+            &mut module_info,
+            std::mem::size_of::<MODULEINFO>() as u32) == FALSE {
+                return Err(GetLastError());
+            }
+    }
+
+    let base = module_info.lpBaseOfDll as usize;
+    let end  = module_info.lpBaseOfDll as usize + module_info.SizeOfImage as usize;
+    for api in module_apis {
+        let p = unsafe { GetProcAddress(h_module, api.as_str().as_ptr() as *const i8) };
+        if !p.is_null() {
+            let ptr  = p as usize;
+            if ptr < base || ptr >= end {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+pub fn is_any_module_hooked(mod_apis: &HashMap<String, Vec<String>>) -> Result<bool, DWORD> {
+    for (module_name, module_apis) in mod_apis {
+        match is_any_api_hooked(&mut module_name.clone(), &module_apis) {
+            Ok(true) => return Ok(true),
+            Err(err) => return Err(err),
+            _        => (),
+        }
+    }
+
+    Ok(false)
+}
+
 
 #[cfg(test)]
 #[cfg(windows)]
@@ -398,5 +526,22 @@ mod tests {
     #[test]
     fn test_is_debugged_int_3() {
         assert_eq!(is_debugged_int_3(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_global_flag() {
+        assert_eq!(is_debugged_global_flag(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_guard_page() {
+        assert_eq!(is_debugged_guard_page(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_any_module_hooked() {
+        let mut hash_map = HashMap::new();
+        hash_map.insert("ntdll".to_string(), vec!["A_SHAFinal".to_string()]);
+        assert_eq!(is_any_module_hooked(&hash_map), Ok(false));
     }
 }
