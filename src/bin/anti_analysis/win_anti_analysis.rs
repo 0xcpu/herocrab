@@ -13,7 +13,9 @@ use herocrab::windows::analysis::{
     is_debugged_int_3,
     is_debugged_global_flag,
     is_debugged_guard_page,
-    is_any_module_hooked
+    is_any_module_hooked,
+    is_debugged_debug_flags,
+    is_debugged_debug_port
 };
 
 use winapi::shared::minwindef::DWORD;
@@ -103,6 +105,16 @@ pub fn run_analysis(config: &serde_json::Value) {
         config_field_name: Some("modules"),
         func: AnalysisFn::Arg1Hm(is_any_module_hooked),
     };
+    let task_is_debug_proc_flags = Task {
+        name: "Process info debug flags",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_debugged_debug_flags),
+    };
+    let task_is_debug_port = Task {
+        name: "Debug port",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_debugged_debug_port),
+    };
     tasks.push(&task_processes);
     tasks.push(&task_windows);
     tasks.push(&task_mutants);
@@ -116,6 +128,8 @@ pub fn run_analysis(config: &serde_json::Value) {
     tasks.push(&task_is_debug_global_flag);
     tasks.push(&task_is_debug_guard_page);
     tasks.push(&task_is_api_hooked);
+    tasks.push(&task_is_debug_proc_flags);
+    tasks.push(&task_is_debug_port);
 
     for t in &tasks {
         print!("Testing: <{:^30}> ", t.name);

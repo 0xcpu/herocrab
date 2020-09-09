@@ -13,9 +13,12 @@ use winapi::shared::{
     minwindef::LPARAM,
     ntdef::HANDLE,
     ntdef::NULL,
+    ntdef::NTSTATUS,
     windef::HWND,
     winerror::ERROR_FILE_NOT_FOUND,
-    ntstatus::STATUS_GUARD_PAGE_VIOLATION
+    ntstatus::STATUS_GUARD_PAGE_VIOLATION,
+    ntstatus::STATUS_SUCCESS,
+    ntstatus::STATUS_PORT_NOT_SET
 };
 use winapi::um::winnt::{
     SYNCHRONIZE, GENERIC_READ, GENERIC_WRITE, FILE_SHARE_WRITE, FILE_SHARE_READ, FILE_ATTRIBUTE_NORMAL,
@@ -41,7 +44,7 @@ use winapi::vc::excpt::{EXCEPTION_CONTINUE_SEARCH, EXCEPTION_CONTINUE_EXECUTION}
 use winapi::um::psapi::{GetModuleInformation, MODULEINFO};
 use winapi::um::libloaderapi::{LoadLibraryW, GetProcAddress};
 
-use ntapi::ntpsapi::NtCurrentPeb;
+use ntapi::ntpsapi::{NtCurrentPeb, NtQueryInformationProcess, ProcessDebugFlags, ProcessDebugObjectHandle};
 
 /// Collect running processes
 pub fn get_processes_names() -> Result<HashSet<String>, DWORD> {
@@ -444,6 +447,52 @@ pub fn is_any_module_hooked(mod_apis: &HashMap<String, Vec<String>>) -> Result<b
     Ok(false)
 }
 
+pub fn is_debugged_debug_flags() -> Result<bool, DWORD> {
+    let mut dw_no_debug: DWORD = 0;
+    let nt_status: NTSTATUS = unsafe {
+        NtQueryInformationProcess(
+            GetCurrentProcess(),
+            ProcessDebugFlags,
+            &mut dw_no_debug as *mut _ as *mut _,
+            mem::size_of::<DWORD>() as u32,
+            NULL as *mut _
+        )
+    };
+
+    if nt_status == STATUS_SUCCESS && dw_no_debug == 0 {
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+pub fn is_debugged_debug_port() -> Result<bool, DWORD> {
+    let mut h_debug_port: HANDLE = NULL;
+    let nt_status: NTSTATUS = unsafe {
+        NtQueryInformationProcess(
+            GetCurrentProcess(),
+            ProcessDebugObjectHandle,
+            &mut h_debug_port as *mut _ as *mut _,
+            #[cfg(target_arch = "x86_64")]
+            {
+                (mem::size_of::<DWORD>() * 2) as u32
+            },
+            #[cfg(target_arch = "x86")]
+            {
+                mem::size_of::<DWORD>() as u32
+            },
+            NULL as *mut _
+        )
+    };
+
+    if nt_status != STATUS_PORT_NOT_SET {
+        Ok(true)
+    } else if !h_debug_port.is_null() {
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
 
 #[cfg(test)]
 #[cfg(windows)]
@@ -543,5 +592,15 @@ mod tests {
         let mut hash_map = HashMap::new();
         hash_map.insert("ntdll".to_string(), vec!["A_SHAFinal".to_string()]);
         assert_eq!(is_any_module_hooked(&hash_map), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_debug_flags() {
+        assert_eq!(is_debugged_debug_flags(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_debugged_debug_port() {
+        assert_eq!(is_debugged_debug_port(), Ok(false));
     }
 }
