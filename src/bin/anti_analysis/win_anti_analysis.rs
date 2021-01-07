@@ -15,7 +15,10 @@ use herocrab::windows::analysis::{
     is_debugged_guard_page,
     is_any_module_hooked,
     is_debugged_debug_flags,
-    is_debugged_debug_port
+    is_debugged_debug_port,
+    is_kernel_debugger_present,
+    does_thread_hide_fail,
+    is_objinfo_numobj_hooked
 };
 
 use winapi::shared::minwindef::DWORD;
@@ -115,6 +118,21 @@ pub fn run_analysis(config: &serde_json::Value) {
         config_field_name: None,
         func: AnalysisFn::Arg0(is_debugged_debug_port),
     };
+    let task_is_kernel_debug = Task {
+        name: "Is kernel debugged",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_kernel_debugger_present),
+    };
+    let task_is_thread_hidden = Task {
+        name: "Is thread hidden",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(does_thread_hide_fail),
+    };
+    let task_is_objinfo_hooked = Task {
+        name: "TotalNumberOfObjects hooked",
+        config_field_name: None,
+        func: AnalysisFn::Arg0(is_objinfo_numobj_hooked),
+    };
     tasks.push(&task_processes);
     tasks.push(&task_windows);
     tasks.push(&task_mutants);
@@ -130,7 +148,9 @@ pub fn run_analysis(config: &serde_json::Value) {
     tasks.push(&task_is_api_hooked);
     tasks.push(&task_is_debug_proc_flags);
     tasks.push(&task_is_debug_port);
-
+    tasks.push(&task_is_kernel_debug);
+    tasks.push(&task_is_thread_hidden);
+    tasks.push(&task_is_objinfo_hooked);
     for t in &tasks {
         print!("Testing: <{:^30}> ", t.name);
         if let Some(cn) = t.config_field_name {

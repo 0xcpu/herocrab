@@ -6,19 +6,10 @@ use std::collections::{HashSet, HashMap};
 use std::mem;
 
 use winapi::shared::{
-    minwindef::FALSE,
-    minwindef::MAX_PATH,
-    minwindef::TRUE,
-    minwindef::DWORD,
-    minwindef::LPARAM,
-    ntdef::HANDLE,
-    ntdef::NULL,
-    ntdef::NTSTATUS,
-    windef::HWND,
-    winerror::ERROR_FILE_NOT_FOUND,
-    ntstatus::STATUS_GUARD_PAGE_VIOLATION,
-    ntstatus::STATUS_SUCCESS,
-    ntstatus::STATUS_PORT_NOT_SET
+    minwindef::DWORD, minwindef::FALSE, minwindef::LPARAM, minwindef::MAX_PATH,
+    minwindef::TRUE, ntdef::HANDLE, ntdef::NTSTATUS, ntdef::{NULL, OBJECT_ATTRIBUTES},
+    ntstatus::STATUS_GUARD_PAGE_VIOLATION, ntstatus::STATUS_PORT_NOT_SET, ntstatus::STATUS_SUCCESS,
+    windef::HWND, winerror::ERROR_FILE_NOT_FOUND
 };
 use winapi::um::winnt::{
     SYNCHRONIZE, GENERIC_READ, GENERIC_WRITE, FILE_SHARE_WRITE, FILE_SHARE_READ, FILE_ATTRIBUTE_NORMAL,
@@ -44,7 +35,14 @@ use winapi::vc::excpt::{EXCEPTION_CONTINUE_SEARCH, EXCEPTION_CONTINUE_EXECUTION}
 use winapi::um::psapi::{GetModuleInformation, MODULEINFO};
 use winapi::um::libloaderapi::{LoadLibraryW, GetProcAddress};
 
-use ntapi::ntpsapi::{NtCurrentPeb, NtQueryInformationProcess, ProcessDebugFlags, ProcessDebugObjectHandle};
+use ntapi::{
+    ntdbg::{DEBUG_ALL_ACCESS, NtCreateDebugObject},
+    ntpsapi::{
+    NtCurrentPeb, NtQueryInformationProcess, NtSetInformationThread, NtQueryInformationThread,
+    ProcessDebugFlags, ProcessDebugObjectHandle, ThreadHideFromDebugger
+}};
+use ntapi::ntexapi::{NtQuerySystemInformation, SystemKernelDebuggerInformation};
+use ntapi::ntobapi::{POBJECT_TYPE_INFORMATION, ObjectTypeInformation, NtQueryObject};
 
 /// Collect running processes
 pub fn get_processes_names() -> Result<HashSet<String>, DWORD> {
@@ -494,6 +492,94 @@ pub fn is_debugged_debug_port() -> Result<bool, DWORD> {
     }
 }
 
+// Based on WudfIsKernelDebuggerPresent in WUDFPlatform.dll
+pub fn is_kernel_debugger_present() -> Result<bool, DWORD> {
+    let mut no_kernel_debug: i16 = 0;
+    let nt_status: NTSTATUS = unsafe {
+          NtQuerySystemInformation(
+              SystemKernelDebuggerInformation, 
+              &mut no_kernel_debug as *mut _ as *mut _,
+              mem::size_of::<i16>() as u32,
+              NULL as *mut _)
+    };
+
+    if nt_status == STATUS_SUCCESS {
+        if no_kernel_debug != 0x1 {
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    } else {
+        Ok(false)
+    }
+}
+
+pub fn does_thread_hide_fail() -> Result<bool, DWORD> {
+    let nt_status: NTSTATUS = unsafe {
+        NtSetInformationThread(
+            GetCurrentThread(),
+            ThreadHideFromDebugger,
+            NULL as *mut _,
+            0)
+    };
+
+    if nt_status == STATUS_SUCCESS {
+        let mut is_thread_hidden = false;
+        let nt_status: NTSTATUS = unsafe {
+            NtQueryInformationThread(
+                GetCurrentThread(),
+                ThreadHideFromDebugger,
+                &mut is_thread_hidden as *mut _ as *mut _,
+                mem::size_of::<bool>() as u32,
+                NULL as *mut _)
+        };
+
+        if nt_status == STATUS_SUCCESS {
+            match is_thread_hidden {
+                true => return Ok(false),
+                false => return Ok(true),
+            }
+        }
+
+        unsafe {
+            Err(GetLastError())
+        }
+    } else {
+        Ok(true)
+    }
+}
+
+pub fn is_objinfo_numobj_hooked() -> Result<bool, DWORD> {
+    let mut h_debug_object: HANDLE = NULL;
+    let mut obj_attrib = unsafe { mem::zeroed::<OBJECT_ATTRIBUTES>() };
+    let obj_info: POBJECT_TYPE_INFORMATION = vec![0; 4096].as_mut_ptr() as *mut _;
+
+    let nt_status: NTSTATUS = unsafe {
+        NtCreateDebugObject(&mut h_debug_object as *mut _, DEBUG_ALL_ACCESS, &mut obj_attrib, 0)
+    };
+    if nt_status == STATUS_SUCCESS {
+        let nt_status: NTSTATUS = unsafe {
+            CloseHandle(h_debug_object);
+
+            NtQueryObject(
+                h_debug_object, 
+                ObjectTypeInformation, 
+                obj_info as *mut _, 
+                4096, 
+                0 as *mut _)
+        };
+
+        unsafe {
+            dbg!((*obj_info).TotalNumberOfObjects);
+            if nt_status == STATUS_SUCCESS && (*obj_info).TotalNumberOfObjects == 0 {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 #[cfg(test)]
 #[cfg(windows)]
 mod tests {
@@ -602,5 +688,20 @@ mod tests {
     #[test]
     fn test_is_debugged_debug_port() {
         assert_eq!(is_debugged_debug_port(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_kernel_debugger_present() {
+        assert_eq!(is_kernel_debugger_present(), Ok(false));
+    }
+
+    #[test]
+    fn test_thread_hide_failed() {
+        assert_eq!(does_thread_hide_fail(), Ok(false));
+    }
+
+    #[test]
+    fn test_is_objinfo_numobj_hooked() {
+        assert_eq!(is_objinfo_numobj_hooked(), Ok(false));
     }
 }
